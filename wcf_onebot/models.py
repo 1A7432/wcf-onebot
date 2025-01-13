@@ -44,8 +44,9 @@ class WCFMessage(BaseModel):
     roomid: Optional[str] = None
     is_group: bool = False
     at_users: List[str] = Field(default_factory=list)
-    extra: Dict[str, Any] = Field(default_factory=dict)
     # 文件相关字段
+    thumb: Optional[str] = None         # 缩略图文件路径
+    extra: Optional[str] = None         # 额外文件路径（如图片、视频等）
     file_url: Optional[str] = None      # 文件的HTTP URL
     thumb_url: Optional[str] = None     # 缩略图的HTTP URL（仅图片消息）
     file_name: Optional[str] = None     # 文件名
@@ -58,6 +59,10 @@ class WCFMessage(BaseModel):
         msg_logger.debug(f"发送者: {self.sender}")
         msg_logger.debug(f"群ID: {self.roomid if self.is_group else '非群消息'}")
         msg_logger.debug(f"内容: {self.content}")
+        if self.extra:
+            msg_logger.debug(f"文件路径: {self.extra}")
+        if self.thumb:
+            msg_logger.debug(f"缩略图路径: {self.thumb}")
         if self.file_url:
             msg_logger.debug(f"文件URL: {self.file_url}")
             msg_logger.debug(f"文件名: {self.file_name}")
@@ -276,31 +281,42 @@ class MessageConverter:
                 return msg.content
                 
             elif msg_type == WeChatMsgType.IMAGE:
-                if msg.file_url:
+                # 如果有本地文件路径，直接使用
+                if msg.extra:
+                    return f"[CQ:image,file=file:///{msg.extra}]"
+                # 否则尝试下载
+                elif msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
                     if file_path:
                         return f"[CQ:image,file=file:///{file_path}]"
                 return "[图片下载失败]"
                 
             elif msg_type == WeChatMsgType.VOICE:
-                if msg.file_url:
+                if msg.extra:
+                    return f"[CQ:record,file=file:///{msg.extra}]"
+                elif msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
                     if file_path:
                         return f"[CQ:record,file=file:///{file_path}]"
                 return "[语音下载失败]"
                 
             elif msg_type == WeChatMsgType.VIDEO:
-                if msg.file_url:
+                if msg.extra:
+                    return f"[CQ:video,file=file:///{msg.extra}]"
+                elif msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
                     if file_path:
                         return f"[CQ:video,file=file:///{file_path}]"
                 return "[视频下载失败]"
                 
             elif msg_type == WeChatMsgType.FILE:
-                if msg.file_url:
-                    file_path = await file_manager.download_file(msg.file_url, msg.file_name)
+                file_name = msg.file_name or (msg.extra and Path(msg.extra).name)
+                if msg.extra:
+                    return f"[CQ:file,file=file:///{msg.extra},name={file_name}]"
+                elif msg.file_url:
+                    file_path = await file_manager.download_file(msg.file_url, file_name)
                     if file_path:
-                        return f"[CQ:file,file=file:///{file_path},name={msg.file_name}]"
+                        return f"[CQ:file,file=file:///{file_path},name={file_name}]"
                 return "[文件下载失败]"
                 
             elif msg_type == WeChatMsgType.APP:

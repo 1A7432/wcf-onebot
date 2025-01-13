@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
+# 加载环境变量
 load_dotenv()
 
 class Config(BaseModel):
@@ -29,7 +30,7 @@ class Config(BaseModel):
     port: int = int(os.getenv("PORT", "8022"))
     
     # 文件存储配置
-    storage_path: str = os.getenv("STORAGE_PATH", "storage")
+    storage_path: str = os.path.abspath(os.path.expanduser(os.getenv("STORAGE_PATH", "./storage")))
     
     # 缓存的机器人 self_id
     _self_id: Optional[int] = None

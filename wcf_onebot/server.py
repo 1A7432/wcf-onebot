@@ -7,10 +7,9 @@ from typing import Optional
 from datetime import datetime
 
 from .config import config
-from .models import WCFMessage, OneBotMessage, MessageConverter
+from .models import WCFMessage, OneBotMessage, MessageConverter, file_manager
 from .wcf_client import wcf_client
 from .logger import logger, msg_logger
-from .file_manager import file_manager  # Import file_manager
 
 app = FastAPI(title="WCF-OneBot Bridge")
 

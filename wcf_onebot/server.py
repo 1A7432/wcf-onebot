@@ -39,10 +39,14 @@ async def handle_webhook(request: web.Request) -> web.Response:
         data = await request.json()
         log_webhook(data)
         
-        # 处理消息
-        message = await MessageConverter.convert_message(data)
-        if message:
-            log_message_conversion(data, message.dict())
+        # 解析为 WCFMessage
+        wcf_msg = WCFMessage(**data)
+        wcf_msg.log_details()
+        
+        # 转换消息
+        onebot_msg = await MessageConverter.wcf_to_onebot(wcf_msg)
+        if onebot_msg:
+            log_message_conversion(data, onebot_msg.dict())
             # TODO: 发送到 OneBot 服务器
             return web.Response(text="OK")
         
@@ -64,10 +68,11 @@ async def handle_websocket(request):
                 try:
                     # 解析消息
                     data = json.loads(msg.data)
-                    message = WCFMessage(**data)
+                    wcf_msg = WCFMessage(**data)
+                    wcf_msg.log_details()
                     
                     # 转换消息
-                    onebot_msg = await MessageConverter.convert_message(data)
+                    onebot_msg = await MessageConverter.wcf_to_onebot(wcf_msg)
                     if onebot_msg:
                         log_message_conversion(data, onebot_msg.dict())
                         # TODO: 发送到 OneBot 服务器

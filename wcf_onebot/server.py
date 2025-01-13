@@ -10,6 +10,7 @@ from .config import config
 from .models import WCFMessage, OneBotMessage, MessageConverter
 from .wcf_client import wcf_client
 from .logger import logger, msg_logger
+from .file_manager import file_manager  # Import file_manager
 
 app = FastAPI(title="WCF-OneBot Bridge")
 
@@ -55,6 +56,8 @@ async def startup_event():
     logger.info("服务正在启动...")
     try:
         await init_self_id()
+        # 启动文件清理任务
+        file_manager.start_cleanup()
         logger.info("服务启动成功")
     except Exception as e:
         logger.error(f"服务启动失败: {str(e)}")
@@ -64,6 +67,8 @@ async def startup_event():
 async def shutdown_event():
     """服务关闭时清理"""
     logger.info("服务正在关闭...")
+    # 停止文件清理任务
+    file_manager.stop_cleanup()
     await onebot_client.aclose()
     logger.info("服务已关闭")
 

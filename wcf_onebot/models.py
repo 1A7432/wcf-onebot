@@ -96,8 +96,23 @@ class FileManager:
         self.storage_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"初始化文件管理器，存储路径: {storage_path}")
         
-        # 启动清理任务
-        asyncio.create_task(self._clean_old_files())
+        # 不在初始化时启动清理任务
+        self._cleanup_task = None
+    
+    def start_cleanup(self):
+        """启动清理任务"""
+        if self._cleanup_task is None:
+            try:
+                loop = asyncio.get_running_loop()
+                self._cleanup_task = loop.create_task(self._clean_old_files())
+            except RuntimeError:
+                logger.warning("无法启动清理任务：没有运行中的事件循环")
+    
+    def stop_cleanup(self):
+        """停止清理任务"""
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
     
     async def download_file(self, url: str, filename: str = None) -> Optional[Path]:
         """下载文件并返回本地路径"""

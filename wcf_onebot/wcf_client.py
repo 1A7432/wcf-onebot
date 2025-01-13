@@ -20,7 +20,7 @@ class WCFClient:
             response = await self.client.get("/islogin")  # 修正 API 路径
             data = response.json()
             logger.debug(f"登录状态检查响应: {data}")
-            return data.get("data", {}).get("is_login", False)  # 修正响应解析
+            return data.get("data", False)  # 直接获取 data 字段的布尔值
         except Exception as e:
             logger.error(f"检查登录状态失败: {str(e)}")
             return False

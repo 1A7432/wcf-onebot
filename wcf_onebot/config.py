@@ -33,14 +33,16 @@ class Config(BaseModel):
     storage_path: str = os.path.abspath(os.path.expanduser(os.getenv("STORAGE_PATH", "./storage")))
     
     # 缓存的机器人 self_id
-    _self_id: Optional[int] = None
+    _self_id: Optional[str] = None
     
     @property
-    def self_id(self) -> Optional[int]:
-        return self._self_id if self._self_id is not None else 0
+    def self_id(self) -> str:
+        """获取机器人原始微信ID"""
+        return self._self_id if self._self_id is not None else ""
     
     @self_id.setter
-    def self_id(self, value: int):
+    def self_id(self, value: str):
+        """设置机器人原始微信ID"""
         self._self_id = value
 
     @property
@@ -50,7 +52,6 @@ class Config(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
         # 确保存储目录存在
-        storage_dir = Path(self.storage_path)
-        storage_dir.mkdir(parents=True, exist_ok=True)
+        os.makedirs(self.storage_path, exist_ok=True)
 
 config = Config()

@@ -67,7 +67,7 @@ class OneBotMessage(BaseModel):
     """OneBot v11 消息模型"""
     post_type: str = "message"
     time: int = Field(default_factory=lambda: int(datetime.now().timestamp()))
-    self_id: int = Field(default_factory=lambda: config.self_id)
+    self_id: int = Field(default_factory=lambda: MessageConverter._convert_sender_id(config.self_id))
     message_type: Literal["private", "group"]
     sub_type: str = "normal"
     message_id: int
@@ -82,12 +82,11 @@ class OneBotMessage(BaseModel):
 
     def log_details(self):
         """记录消息详情"""
-        msg_logger.debug("转换后的OneBot消息:")
-        msg_logger.debug(f"消息类型: {self.message_type}")
-        msg_logger.debug(f"发送者ID: {self.user_id}")
-        msg_logger.debug(f"群ID: {self.group_id if self.group_id else '非群消息'}")
-        msg_logger.debug(f"消息内容: {self.message}")
-        msg_logger.debug(f"原始消息: {self.raw_message}")
+        msg_logger.info(
+            f"OneBot消息 - 类型: {self.message_type}, "
+            f"发送者: {self.user_id}, "
+            f"内容: {self.message}"
+        )
 
 class FileManager:
     """文件管理器"""
@@ -327,4 +326,5 @@ class MessageConverter:
         if not sender_id:
             return 0
         # 使用哈希函数生成一个固定的数字ID
+        # 使用更短的哈希以避免整数溢出
         return int(hashlib.md5(sender_id.encode()).hexdigest()[:8], 16)

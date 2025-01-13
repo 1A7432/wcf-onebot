@@ -42,9 +42,13 @@ async def init_self_id():
             logger.error("获取微信ID失败")
             raise Exception("Failed to get wxid")
             
-        # 转换并缓存 self_id
-        config.self_id = MessageConverter._convert_sender_id(wxid)
-        logger.info(f"初始化完成，self_id: {config.self_id}")
+        logger.info(f"获取到机器人微信ID: {wxid}")
+        
+        # 存储原始微信ID
+        config.self_id = wxid
+        # 转换为数字ID用于日志显示
+        numeric_id = MessageConverter._convert_sender_id(wxid)
+        logger.info(f"初始化完成，self_id (原始): {wxid}, (数字): {numeric_id}")
     except Exception as e:
         logger.error(f"初始化 self_id 失败: {str(e)}")
         raise

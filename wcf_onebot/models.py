@@ -13,6 +13,7 @@ import asyncio
 import aiofiles
 import mimetypes
 from datetime import datetime, timedelta
+from .logger import logger, msg_logger, log_message_conversion, log_file_operation
 
 class WeChatMsgType(IntEnum):
     """微信消息类型"""
@@ -25,6 +26,14 @@ class WeChatMsgType(IntEnum):
     LOCATION = 48      # 位置消息
     APP = 49           # APP消息/链接/小程序
     SYSTEM = 10000     # 系统消息
+
+    @classmethod
+    def get_type_name(cls, type_id: int) -> str:
+        """获取消息类型名称"""
+        try:
+            return cls(type_id).name
+        except ValueError:
+            return f"未知类型({type_id})"
 
 class WCFMessage(BaseModel):
     """WCF 消息模型"""
@@ -42,6 +51,18 @@ class WCFMessage(BaseModel):
     file_name: Optional[str] = None     # 文件名
     file_size: Optional[int] = None     # 文件大小（字节）
 
+    def log_details(self):
+        """记录消息详情"""
+        msg_type = WeChatMsgType.get_type_name(self.type)
+        msg_logger.debug(f"收到{msg_type}消息:")
+        msg_logger.debug(f"发送者: {self.sender}")
+        msg_logger.debug(f"群ID: {self.roomid if self.is_group else '非群消息'}")
+        msg_logger.debug(f"内容: {self.content}")
+        if self.file_url:
+            msg_logger.debug(f"文件URL: {self.file_url}")
+            msg_logger.debug(f"文件名: {self.file_name}")
+            msg_logger.debug(f"文件大小: {self.file_size} 字节")
+
 class OneBotMessage(BaseModel):
     """OneBot v11 消息模型"""
     post_type: str = "message"
@@ -54,78 +75,101 @@ class OneBotMessage(BaseModel):
     message: str
     raw_message: str
     font: int = 0
-    sender: Dict[str, Any]
-    
-    # 群消息特有字段
+    sender: Dict[str, Any] = Field(default_factory=dict)
     group_id: Optional[int] = None
+    message_seq: Optional[int] = None
+    anonymous: Optional[Dict[str, Any]] = None
+
+    def log_details(self):
+        """记录消息详情"""
+        msg_logger.debug("转换后的OneBot消息:")
+        msg_logger.debug(f"消息类型: {self.message_type}")
+        msg_logger.debug(f"发送者ID: {self.user_id}")
+        msg_logger.debug(f"群ID: {self.group_id if self.group_id else '非群消息'}")
+        msg_logger.debug(f"消息内容: {self.message}")
+        msg_logger.debug(f"原始消息: {self.raw_message}")
 
 class FileManager:
     """文件管理器"""
     def __init__(self, storage_path: str = "storage"):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"初始化文件管理器，存储路径: {storage_path}")
         
         # 启动清理任务
         asyncio.create_task(self._clean_old_files())
-        
-    async def download_file(self, url: str, filename: str = None) -> Path:
+    
+    async def download_file(self, url: str, filename: str = None) -> Optional[Path]:
         """下载文件并返回本地路径"""
-        # 生成文件名
-        if not filename:
-            # 从URL中提取文件名，如果没有则使用URL的哈希值
-            filename = url.split("/")[-1]
-            if not filename or len(filename) < 5:
-                filename = hashlib.md5(url.encode()).hexdigest()
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url)
+                response.raise_for_status()
                 
-            # 添加文件扩展名
-            content_type = mimetypes.guess_type(url)[0]
-            if content_type:
-                ext = mimetypes.guess_extension(content_type)
-                if ext:
-                    filename = f"{filename}{ext}"
-                    
-        # 生成本地路径
-        file_path = self.storage_path / filename
-        
-        # 如果文件已存在且未过期，直接返回
-        if file_path.exists() and self._is_file_valid(file_path):
-            return file_path
-            
-        # 下载文件
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            
-            async with aiofiles.open(file_path, "wb") as f:
-                await f.write(response.content)
+                if not filename:
+                    # 从URL或Content-Disposition中获取文件名
+                    filename = self._get_filename_from_response(response, url)
                 
-        return file_path
+                # 生成唯一文件名
+                file_path = self.storage_path / self._generate_unique_filename(filename)
+                
+                # 保存文件
+                async with aiofiles.open(file_path, 'wb') as f:
+                    await f.write(response.content)
+                
+                log_file_operation("下载", str(file_path))
+                return file_path
+                
+        except Exception as e:
+            log_file_operation("下载", url, success=False)
+            logger.error(f"文件下载失败: {str(e)}")
+            return None
+    
+    def _get_filename_from_response(self, response: httpx.Response, url: str) -> str:
+        """从响应或URL中获取文件名"""
+        # 尝试从Content-Disposition获取
+        if 'content-disposition' in response.headers:
+            cd = response.headers['content-disposition']
+            if 'filename=' in cd:
+                return cd.split('filename=')[-1].strip('"')
         
+        # 从URL中获取
+        return url.split('/')[-1] or 'unknown_file'
+    
+    def _generate_unique_filename(self, original_name: str) -> str:
+        """生成唯一的文件名"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        name, ext = os.path.splitext(original_name)
+        return f"{name}_{timestamp}{ext}"
+    
     def _is_file_valid(self, file_path: Path) -> bool:
         """检查文件是否有效（未过期）"""
-        # 文件不存在
         if not file_path.exists():
             return False
-            
-        # 检查文件修改时间
-        mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-        return datetime.now() - mtime <= timedelta(hours=24)
         
+        # 获取文件修改时间
+        mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+        # 文件超过24小时就视为过期
+        return datetime.now() - mtime < timedelta(hours=24)
+    
     async def _clean_old_files(self):
         """定期清理旧文件"""
         while True:
             try:
-                now = datetime.now()
-                for file_path in self.storage_path.glob("*"):
+                cleaned_count = 0
+                for file_path in self.storage_path.glob('*'):
                     if not self._is_file_valid(file_path):
-                        try:
-                            file_path.unlink()
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-            finally:
+                        file_path.unlink()
+                        cleaned_count += 1
+                
+                if cleaned_count > 0:
+                    logger.info(f"清理了 {cleaned_count} 个过期文件")
+                    
                 await asyncio.sleep(3600)  # 每小时检查一次
+                
+            except Exception as e:
+                logger.error(f"清理文件时出错: {str(e)}")
+                await asyncio.sleep(3600)  # 发生错误时也等待一小时
 
 # 创建全局文件管理器实例
 file_manager = FileManager(config.storage_path)
@@ -133,160 +177,139 @@ file_manager = FileManager(config.storage_path)
 class MessageConverter:
     """消息转换器"""
     @staticmethod
+    async def wcf_to_onebot(msg: WCFMessage) -> OneBotMessage:
+        """将WCF消息转换为OneBot消息"""
+        try:
+            # 记录原始消息
+            msg.log_details()
+            
+            # 解析消息内容
+            parsed_content = await MessageConverter._parse_message_content(msg)
+            
+            # 创建 OneBot 消息
+            onebot_msg = OneBotMessage(
+                message_type="group" if msg.is_group else "private",
+                message_id=MessageConverter._generate_message_id(),
+                user_id=MessageConverter._convert_sender_id(msg.sender),
+                message=parsed_content,
+                raw_message=msg.content,
+                group_id=MessageConverter._convert_sender_id(msg.roomid) if msg.is_group else None,
+            )
+            
+            # 记录转换后的消息
+            onebot_msg.log_details()
+            
+            # 记录转换结果
+            log_message_conversion(
+                msg.dict(),
+                onebot_msg.dict(),
+                success=True
+            )
+            
+            return onebot_msg
+            
+        except Exception as e:
+            logger.error(f"消息转换失败: {str(e)}")
+            log_message_conversion(
+                msg.dict(),
+                {"error": str(e)},
+                success=False
+            )
+            raise
+    
+    @staticmethod
     def _extract_at_users(xml: str) -> List[str]:
         """从XML中提取被@的用户列表"""
         try:
-            match = re.search(r'<atuserlist>(.*?)</atuserlist>', xml)
+            pattern = r'<atuserlist>(.*?)</atuserlist>'
+            match = re.search(pattern, xml)
             if match:
-                return match.group(1).split(',')
-        except Exception:
-            pass
-        return []
-
+                users = match.group(1).split(',')
+                return [user for user in users if user]
+            return []
+        except Exception as e:
+            logger.error(f"提取@用户列表失败: {str(e)}")
+            return []
+    
     @staticmethod
     def _extract_app_message_info(xml: str) -> Dict[str, str]:
         """从XML中提取APP消息信息"""
         try:
-            title_match = re.search(r'<title>(.*?)</title>', xml)
-            desc_match = re.search(r'<des>(.*?)</des>', xml)
-            url_match = re.search(r'<url>(.*?)</url>', xml)
+            title_pattern = r'<title>(.*?)</title>'
+            desc_pattern = r'<des>(.*?)</des>'
+            url_pattern = r'<url>(.*?)</url>'
+            
+            title = re.search(title_pattern, xml)
+            desc = re.search(desc_pattern, xml)
+            url = re.search(url_pattern, xml)
             
             return {
-                "title": title_match.group(1) if title_match else "",
-                "desc": desc_match.group(1) if desc_match else "",
-                "url": url_match.group(1) if url_match else "",
+                'title': title.group(1) if title else '',
+                'description': desc.group(1) if desc else '',
+                'url': url.group(1) if url else ''
             }
-        except Exception:
+        except Exception as e:
+            logger.error(f"提取APP消息信息失败: {str(e)}")
             return {}
-
+    
     @staticmethod
     async def _parse_message_content(msg: WCFMessage) -> str:
         """解析消息内容，处理特殊消息类型"""
-        msg_type = WeChatMsgType(msg.type)
-        
-        if msg_type == WeChatMsgType.TEXT:
-            # 文本消息
-            content = msg.content
-            # 处理@消息
-            for at_user in msg.at_users:
-                content = content.replace(f"@{at_user}", f"[CQ:at,qq={MessageConverter._convert_sender_id(at_user)}]")
-            return content
+        try:
+            msg_type = WeChatMsgType(msg.type)
             
-        elif msg_type == WeChatMsgType.IMAGE:
-            # 图片消息
-            if msg.file_url:
-                try:
-                    # 下载图片
+            if msg_type == WeChatMsgType.TEXT:
+                return msg.content
+                
+            elif msg_type == WeChatMsgType.IMAGE:
+                if msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
-                    return f"[CQ:image,file=file:///{file_path}]"
-                except Exception as e:
-                    print(f"下载图片失败: {e}")
-            return "[图片消息]"
-            
-        elif msg_type == WeChatMsgType.VOICE:
-            # 语音消息
-            if msg.file_url:
-                try:
-                    # 下载语音
+                    if file_path:
+                        return f"[CQ:image,file=file:///{file_path}]"
+                return "[图片下载失败]"
+                
+            elif msg_type == WeChatMsgType.VOICE:
+                if msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
-                    return f"[CQ:record,file=file:///{file_path}]"
-                except Exception as e:
-                    print(f"下载语音失败: {e}")
-            return "[语音消息]"
-            
-        elif msg_type == WeChatMsgType.VIDEO:
-            # 视频消息
-            if msg.file_url:
-                try:
-                    # 下载视频
+                    if file_path:
+                        return f"[CQ:record,file=file:///{file_path}]"
+                return "[语音下载失败]"
+                
+            elif msg_type == WeChatMsgType.VIDEO:
+                if msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
-                    return f"[CQ:video,file=file:///{file_path}]"
-                except Exception as e:
-                    print(f"下载视频失败: {e}")
-            return "[视频消息]"
-            
-        elif msg_type == WeChatMsgType.FILE:
-            # 文件消息
-            if msg.file_url:
-                try:
-                    # 下载文件
+                    if file_path:
+                        return f"[CQ:video,file=file:///{file_path}]"
+                return "[视频下载失败]"
+                
+            elif msg_type == WeChatMsgType.FILE:
+                if msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url, msg.file_name)
-                    return f"[CQ:file,file=file:///{file_path},name={msg.file_name or 'file'}]"
-                except Exception as e:
-                    print(f"下载文件失败: {e}")
-            return f"[文件消息: {msg.file_name}]"
-            
-        elif msg_type == WeChatMsgType.EMOJI:
-            # 表情消息
-            return f"[CQ:face,id={msg.content}]"
-            
-        elif msg_type == WeChatMsgType.LOCATION:
-            # 位置消息
-            try:
-                loc_data = json.loads(msg.content)
-                return f"[CQ:location,lat={loc_data.get('lat', 0)},lon={loc_data.get('lon', 0)},title={loc_data.get('title', '')}]"
-            except:
-                return "[位置消息]"
-            
-        elif msg_type == WeChatMsgType.APP:
-            # APP消息/链接/小程序
-            app_info = MessageConverter._extract_app_message_info(msg.xml)
-            if app_info:
-                return f"[CQ:share,url={app_info['url']},title={app_info['title']},content={app_info['desc']}]"
-            return "[应用消息]"
-            
-        elif msg_type == WeChatMsgType.SYSTEM:
-            # 系统消息
-            return f"[系统消息] {msg.content}"
-            
-        else:
-            # 未知消息类型
-            return f"[未知消息类型] {msg.content}"
-
+                    if file_path:
+                        return f"[CQ:file,file=file:///{file_path},name={msg.file_name}]"
+                return "[文件下载失败]"
+                
+            elif msg_type == WeChatMsgType.APP:
+                app_info = MessageConverter._extract_app_message_info(msg.xml)
+                return f"[应用消息]\n标题: {app_info.get('title', '')}\n描述: {app_info.get('description', '')}\n链接: {app_info.get('url', '')}"
+                
+            else:
+                logger.warning(f"未处理的消息类型: {msg_type.name}")
+                return f"[未支持的消息类型: {msg_type.name}]"
+                
+        except Exception as e:
+            logger.error(f"解析消息内容失败: {str(e)}")
+            return f"[消息解析失败: {str(e)}]"
+    
     @staticmethod
     def _generate_message_id() -> int:
         """生成消息ID"""
-        return int(datetime.now().timestamp() * 1000) % (2**31)
-
+        return int(datetime.now().timestamp() * 1000)
+    
     @staticmethod
     def _convert_sender_id(sender_id: str) -> int:
         """将微信ID转换为数字ID（为了兼容OneBot的整数ID要求）"""
-        return abs(hash(sender_id)) % (2**31)
-
-    @staticmethod
-    async def wcf_to_onebot(msg: WCFMessage) -> OneBotMessage:
-        """将WCF消息转换为OneBot消息"""
-        # 提取被@的用户列表
-        msg.at_users = MessageConverter._extract_at_users(msg.xml)
-        
-        # 处理消息内容
-        message = await MessageConverter._parse_message_content(msg)
-        
-        # 转换发送者ID
-        user_id = MessageConverter._convert_sender_id(msg.sender)
-        
-        # 构建基本消息结构
-        onebot_msg = {
-            "post_type": "message",
-            "time": int(datetime.now().timestamp()),
-            "self_id": config.self_id,
-            "message_type": "group" if msg.is_group else "private",
-            "sub_type": "normal",
-            "message_id": MessageConverter._generate_message_id(),
-            "user_id": user_id,
-            "message": message,
-            "raw_message": msg.content,
-            "font": 0,
-            "sender": {
-                "user_id": user_id,
-                "nickname": msg.sender,
-                "card": msg.sender,
-            }
-        }
-
-        # 如果是群消息，添加群相关信息
-        if msg.is_group and msg.roomid:
-            onebot_msg["group_id"] = MessageConverter._convert_sender_id(msg.roomid)
-            onebot_msg["sender"]["card"] = msg.sender  # 群名片
-
-        return OneBotMessage(**onebot_msg)
+        if not sender_id:
+            return 0
+        # 使用哈希函数生成一个固定的数字ID
+        return int(hashlib.md5(sender_id.encode()).hexdigest()[:8], 16)

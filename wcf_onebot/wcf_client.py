@@ -41,9 +41,9 @@ class WCFClient:
         try:
             response = await self.client.get("/selfwxid")  # 修正 API 路径
             data = response.json()
+            logger.debug(f"获取微信ID响应: {data}")
             if data.get("status") == 0 and data.get("data"):
                 wxid = data.get("data")
-                logger.info(f"获取到机器人微信ID: {wxid}")
                 return wxid
             return None
         except Exception as e:

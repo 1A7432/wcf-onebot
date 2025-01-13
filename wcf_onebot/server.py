@@ -108,18 +108,23 @@ async def receive_message(message: WCFMessage):
         logger.error(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
 
-@app.post("/webhook")
-async def webhook(request: Request):
-    """接收 WCF 的回调消息"""
+async def handle_webhook(request: Request):
+    """处理 WCF 的 Webhook 回调"""
     try:
         data = await request.json()
         logger.info(f"收到 WCF 回调消息: {data}")
+        
+        # 处理消息
         message = WCFMessage(**data)
         await receive_message(message)
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"处理回调消息失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    return await handle_webhook(request)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

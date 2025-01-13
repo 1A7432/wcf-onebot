@@ -17,7 +17,7 @@ class WCFClient:
     async def is_login(self) -> bool:
         """检查是否已登录"""
         try:
-            response = await self.client.get("/api/is_login")  # 修正 API 路径
+            response = await self.client.get("/islogin")  # 修正 API 路径
             data = response.json()
             logger.debug(f"登录状态检查响应: {data}")
             return data.get("data", {}).get("is_login", False)  # 修正响应解析
@@ -28,7 +28,7 @@ class WCFClient:
     async def get_user_info(self) -> Optional[Dict[str, Any]]:
         """获取登录账号信息"""
         try:
-            response = await self.client.get("/api/get_self_info")  # 修正 API 路径
+            response = await self.client.get("/selfinfo")  # 修正 API 路径
             data = response.json()
             logger.debug(f"获取用户信息响应: {data}")
             return data.get("data", {})  # 修正响应解析
@@ -39,9 +39,10 @@ class WCFClient:
     async def get_self_wxid(self) -> Optional[str]:
         """获取机器人的微信ID"""
         try:
-            user_info = await self.get_user_info()
-            if user_info:
-                wxid = user_info.get("wxid")
+            response = await self.client.get("/selfwxid")  # 修正 API 路径
+            data = response.json()
+            if data.get("status") == 0 and data.get("data"):
+                wxid = data.get("data")
                 logger.info(f"获取到机器人微信ID: {wxid}")
                 return wxid
             return None

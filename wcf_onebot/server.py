@@ -1,31 +1,13 @@
-from fastapi import FastAPI, HTTPException, Header, WebSocket, Request
-from fastapi.middleware.cors import CORSMiddleware
-import httpx
-import json
+from aiohttp import web, WSMsgType
 import asyncio
-from typing import Optional
-from datetime import datetime
-
+import json
+from .wcf_client import WCFClient
 from .config import config
-from .models import WCFMessage, OneBotMessage, MessageConverter, file_manager
-from .wcf_client import wcf_client
-from .logger import logger, msg_logger
+from .logger import logger, log_webhook, log_message_conversion
+from .models import MessageConverter, WCFMessage
 
-app = FastAPI(title="WCF-OneBot Bridge")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# OneBot HTTP 客户端
-onebot_client = httpx.AsyncClient(
-    base_url=f"http://{config.onebot_host}:{config.onebot_port}",
-    headers={"Authorization": f"Bearer {config.onebot_access_token}"} if config.onebot_access_token else {}
-)
+# 创建 WCF 客户端实例
+wcf_client = WCFClient()
 
 async def init_self_id():
     """初始化并缓存 self_id"""
@@ -51,132 +33,105 @@ async def init_self_id():
         logger.error(f"初始化 self_id 失败: {str(e)}")
         raise
 
-@app.on_event("startup")
-async def startup_event():
-    """服务启动时初始化"""
-    logger.info("服务正在启动...")
-    try:
-        await init_self_id()
-        # 启动文件清理任务
-        file_manager.start_cleanup()
-        logger.info("服务启动成功")
-    except Exception as e:
-        logger.error(f"服务启动失败: {str(e)}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """服务关闭时清理"""
-    logger.info("服务正在关闭...")
-    # 停止文件清理任务
-    file_manager.stop_cleanup()
-    await onebot_client.aclose()
-    logger.info("服务已关闭")
-
-@app.post("/message")
-async def receive_message(message: WCFMessage):
-    """接收来自 WCF 的消息并转发到 OneBot"""
-    try:
-        # 记录接收到的消息
-        msg_logger.info("收到 WCF 消息:")
-        message.log_details()
-        
-        # 转换为 OneBot 消息
-        start_time = datetime.now()
-        onebot_msg = await MessageConverter.wcf_to_onebot(message)
-        conversion_time = (datetime.now() - start_time).total_seconds()
-        msg_logger.info(f"消息转换耗时: {conversion_time:.3f}秒")
-        
-        # 转发到 OneBot
-        msg_logger.info("正在转发到 OneBot...")
-        response = await onebot_client.post(
-            "/send_msg",
-            json={
-                "message_type": onebot_msg.message_type,
-                "user_id": onebot_msg.user_id if onebot_msg.message_type == "private" else None,
-                "group_id": onebot_msg.group_id if onebot_msg.message_type == "group" else None,
-                "message": onebot_msg.message
-            }
-        )
-        response.raise_for_status()
-        
-        msg_logger.info("消息转发成功")
-        return {"status": "success", "message": "Message forwarded"}
-        
-    except Exception as e:
-        error_msg = f"消息处理失败: {str(e)}"
-        logger.error(error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
-
-async def handle_webhook(request: Request):
+async def handle_webhook(request: web.Request) -> web.Response:
     """处理 WCF 的 Webhook 回调"""
     try:
         data = await request.json()
-        logger.info(f"收到 WCF 回调消息: {data}")
+        log_webhook(data)
         
         # 处理消息
-        message = WCFMessage(**data)
-        await receive_message(message)
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"处理回调消息失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/webhook")
-async def webhook(request: Request):
-    return await handle_webhook(request)
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket 连接处理"""
-    try:
-        logger.info("新的 WebSocket 连接请求")
-        await websocket.accept()
-        logger.info("WebSocket 连接已建立")
+        message = await MessageConverter.convert_message(data)
+        if message:
+            log_message_conversion(data, message.dict())
+            # TODO: 发送到 OneBot 服务器
+            return web.Response(text="OK")
         
-        while True:
-            try:
-                # 接收消息
-                data = await websocket.receive_text()
-                msg_logger.info("收到 WebSocket 消息")
-                
-                # 解析消息
+        return web.Response(text="Ignored")
+    except Exception as e:
+        logger.error(f"处理 Webhook 失败: {str(e)}")
+        return web.Response(text=str(e), status=500)
+
+async def handle_websocket(request):
+    """处理 WebSocket 连接"""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    
+    logger.info("新的 WebSocket 连接已建立")
+    
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
                 try:
-                    msg_data = json.loads(data)
-                    message = WCFMessage(**msg_data)
+                    # 解析消息
+                    data = json.loads(msg.data)
+                    message = WCFMessage(**data)
+                    
+                    # 转换消息
+                    onebot_msg = await MessageConverter.convert_message(data)
+                    if onebot_msg:
+                        log_message_conversion(data, onebot_msg.dict())
+                        # TODO: 发送到 OneBot 服务器
+                        await ws.send_str(json.dumps({"status": "ok"}))
+                    else:
+                        await ws.send_str(json.dumps({"status": "ignored"}))
+                        
                 except json.JSONDecodeError:
                     logger.error("WebSocket 消息解析失败: JSON 格式错误")
-                    continue
-                except Exception as e:
-                    logger.error(f"WebSocket 消息解析失败: {str(e)}")
-                    continue
-                
-                # 处理消息
-                try:
-                    onebot_msg = await MessageConverter.wcf_to_onebot(message)
-                    msg_logger.info("WebSocket 消息转换成功")
-                    
-                    # 转发到 OneBot
-                    response = await onebot_client.post(
-                        "/send_msg",
-                        json={
-                            "message_type": onebot_msg.message_type,
-                            "user_id": onebot_msg.user_id if onebot_msg.message_type == "private" else None,
-                            "group_id": onebot_msg.group_id if onebot_msg.message_type == "group" else None,
-                            "message": onebot_msg.message
-                        }
-                    )
-                    response.raise_for_status()
-                    msg_logger.info("WebSocket 消息转发成功")
-                    
+                    await ws.send_str(json.dumps({"error": "Invalid JSON"}))
                 except Exception as e:
                     logger.error(f"WebSocket 消息处理失败: {str(e)}")
-                    
-            except Exception as e:
-                logger.error(f"WebSocket 连接异常: {str(e)}")
-                break
-                
-    except Exception as e:
-        logger.error(f"WebSocket 连接失败: {str(e)}")
+                    await ws.send_str(json.dumps({"error": str(e)}))
+            
+            elif msg.type == WSMsgType.ERROR:
+                logger.error(f"WebSocket 连接错误: {ws.exception()}")
+    
     finally:
         logger.info("WebSocket 连接已关闭")
+    
+    return ws
+
+async def start_server():
+    """启动服务器"""
+    try:
+        logger.info("服务正在启动...")
+        
+        # 初始化
+        await init_self_id()
+        
+        # 创建应用
+        app = web.Application()
+        
+        # 注册路由
+        app.router.add_post("/", handle_webhook)  # 根路径处理 Webhook
+        app.router.add_get("/ws", handle_websocket)  # WebSocket 路径
+        
+        # 启动服务器
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, config.host, config.port)
+        await site.start()
+        
+        logger.info(f"服务已启动，监听地址: {config.host}:{config.port}")
+        
+        # 保持运行
+        while True:
+            await asyncio.sleep(3600)
+            
+    except Exception as e:
+        logger.error(f"服务启动失败: {str(e)}")
+        raise
+    finally:
+        await wcf_client.close()
+
+def run():
+    """运行服务器"""
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(start_server())
+    except KeyboardInterrupt:
+        logger.info("服务正在关闭...")
+    finally:
+        loop.close()
+
+if __name__ == "__main__":
+    run()

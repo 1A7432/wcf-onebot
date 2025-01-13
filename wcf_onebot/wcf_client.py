@@ -7,7 +7,8 @@ class WCFClient:
     def __init__(self):
         self.client = httpx.AsyncClient(
             base_url=config.wcf_base_url,
-            timeout=10.0
+            timeout=10.0,
+            verify=False  # 禁用SSL验证
         )
         logger.info(f"初始化 WCF 客户端，服务器地址: {config.wcf_base_url}")
     

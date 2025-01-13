@@ -28,7 +28,7 @@ class WCFClient:
     async def get_user_info(self) -> Optional[Dict[str, Any]]:
         """获取登录账号信息"""
         try:
-            response = await self.client.get("/selfinfo")  # 修正 API 路径
+            response = await self.client.get("/userinfo")  # 修正 API 路径
             data = response.json()
             logger.debug(f"获取用户信息响应: {data}")
             return data.get("data", {})  # 修正响应解析

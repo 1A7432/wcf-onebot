@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import os
 from dotenv import load_dotenv
@@ -32,19 +32,9 @@ class Config(BaseModel):
     # 文件存储配置
     storage_path: str = os.path.abspath(os.path.expanduser(os.getenv("STORAGE_PATH", "./storage")))
     
-    # 缓存的机器人 self_id
-    _self_id: Optional[str] = None
+    # 缓存的机器人 self_id（原始微信ID）
+    self_id: str = Field(default="")
     
-    @property
-    def self_id(self) -> str:
-        """获取机器人原始微信ID"""
-        return self._self_id if self._self_id is not None else ""
-    
-    @self_id.setter
-    def self_id(self, value: str):
-        """设置机器人原始微信ID"""
-        self._self_id = value
-
     @property
     def wcf_api_url(self) -> str:
         return f"http://{self.wcf_host}:{self.wcf_port}"

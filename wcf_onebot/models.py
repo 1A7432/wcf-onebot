@@ -281,42 +281,31 @@ class MessageConverter:
                 return msg.content
                 
             elif msg_type == WeChatMsgType.IMAGE:
-                # 如果有本地文件路径，直接使用
-                if msg.extra:
-                    return f"[CQ:image,file=file:///{msg.extra}]"
-                # 否则尝试下载
-                elif msg.file_url:
+                if msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
                     if file_path:
                         return f"[CQ:image,file=file:///{file_path}]"
                 return "[图片下载失败]"
                 
             elif msg_type == WeChatMsgType.VOICE:
-                if msg.extra:
-                    return f"[CQ:record,file=file:///{msg.extra}]"
-                elif msg.file_url:
+                if msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
                     if file_path:
                         return f"[CQ:record,file=file:///{file_path}]"
                 return "[语音下载失败]"
                 
             elif msg_type == WeChatMsgType.VIDEO:
-                if msg.extra:
-                    return f"[CQ:video,file=file:///{msg.extra}]"
-                elif msg.file_url:
+                if msg.file_url:
                     file_path = await file_manager.download_file(msg.file_url)
                     if file_path:
                         return f"[CQ:video,file=file:///{file_path}]"
                 return "[视频下载失败]"
                 
             elif msg_type == WeChatMsgType.FILE:
-                file_name = msg.file_name or (msg.extra and Path(msg.extra).name)
-                if msg.extra:
-                    return f"[CQ:file,file=file:///{msg.extra},name={file_name}]"
-                elif msg.file_url:
-                    file_path = await file_manager.download_file(msg.file_url, file_name)
+                if msg.file_url:
+                    file_path = await file_manager.download_file(msg.file_url, msg.file_name)
                     if file_path:
-                        return f"[CQ:file,file=file:///{file_path},name={file_name}]"
+                        return f"[CQ:file,file=file:///{file_path},name={msg.file_name}]"
                 return "[文件下载失败]"
                 
             elif msg_type == WeChatMsgType.APP:

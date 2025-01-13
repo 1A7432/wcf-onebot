@@ -90,6 +90,13 @@ async def handle_websocket(request):
     
     return ws
 
+# 创建应用
+app = web.Application()
+
+# 注册路由
+app.router.add_post("/", handle_webhook)  # 根路径处理 Webhook
+app.router.add_get("/ws", handle_websocket)  # WebSocket 路径
+
 async def start_server():
     """启动服务器"""
     try:
@@ -97,13 +104,6 @@ async def start_server():
         
         # 初始化
         await init_self_id()
-        
-        # 创建应用
-        app = web.Application()
-        
-        # 注册路由
-        app.router.add_post("/", handle_webhook)  # 根路径处理 Webhook
-        app.router.add_get("/ws", handle_websocket)  # WebSocket 路径
         
         # 启动服务器
         runner = web.AppRunner(app)

@@ -10,7 +10,7 @@ from .onebot_client import OneBotClient
 # 创建 WCF 客户端实例
 wcf_client = WCFClient()
 # 创建 OneBot 客户端实例
-onebot_client = OneBotClient(config.onebot_ws_url)
+onebot_client = OneBotClient(config.onebot_ws_url, config.onebot_access_token)
 
 # 创建应用
 app = web.Application()

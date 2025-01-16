@@ -5,9 +5,15 @@ from .wcf_client import WCFClient
 from .config import config
 from .logger import logger, log_webhook, log_message_conversion
 from .models import MessageConverter, WCFMessage
+from .onebot_client import OneBotClient
 
 # 创建 WCF 客户端实例
 wcf_client = WCFClient()
+# 创建 OneBot 客户端实例
+onebot_client = OneBotClient(config.onebot_ws_url)
+
+# 创建应用
+app = web.Application()
 
 async def init_self_id():
     """初始化并缓存 self_id"""
@@ -28,7 +34,7 @@ async def init_self_id():
         config.self_id = wxid
         # 转换为数字ID用于日志显示
         numeric_id = MessageConverter._convert_sender_id(wxid)
-        logger.info(f"初始化完成，self_id: {wxid} (数字ID: {numeric_id})")
+        logger.info(f"初始化完成，self_id: {numeric_id} (原始ID: {wxid})")
     except Exception as e:
         logger.error(f"初始化 self_id 失败: {str(e)}")
         raise
@@ -47,7 +53,8 @@ async def handle_webhook(request: web.Request) -> web.Response:
         onebot_msg = await MessageConverter.wcf_to_onebot(wcf_msg)
         if onebot_msg:
             log_message_conversion(data, onebot_msg.dict())
-            # TODO: 发送到 OneBot 服务器
+            # 发送到 OneBot 服务器
+            await onebot_client.send_message(onebot_msg)
             return web.Response(text="OK")
         
         return web.Response(text="Ignored")
@@ -75,10 +82,11 @@ async def handle_websocket(request):
                     onebot_msg = await MessageConverter.wcf_to_onebot(wcf_msg)
                     if onebot_msg:
                         log_message_conversion(data, onebot_msg.dict())
-                        # TODO: 发送到 OneBot 服务器
-                        await ws.send_str(json.dumps({"status": "ok"}))
-                    else:
-                        await ws.send_str(json.dumps({"status": "ignored"}))
+                        # 发送到 OneBot 服务器
+                        if await onebot_client.send_message(onebot_msg):
+                            await ws.send_str(json.dumps({"status": "ok"}))
+                        else:
+                            await ws.send_str(json.dumps({"status": "failed", "error": "Failed to send to OneBot server"}))
                         
                 except json.JSONDecodeError:
                     logger.error("WebSocket 消息解析失败: JSON 格式错误")
@@ -95,9 +103,6 @@ async def handle_websocket(request):
     
     return ws
 
-# 创建应用
-app = web.Application()
-
 # 注册路由
 app.router.add_post("/", handle_webhook)  # 根路径处理 Webhook
 app.router.add_get("/ws", handle_websocket)  # WebSocket 路径
@@ -107,8 +112,15 @@ async def start_server():
     try:
         logger.info("服务正在启动...")
         
-        # 初始化
+        # 初始化 self_id
         await init_self_id()
+        
+        # 设置self_id
+        onebot_client.self_id = config.self_id
+        
+        # 连接到 OneBot 服务器
+        if not await onebot_client.connect():
+            logger.error("无法连接到 OneBot 服务器，服务将继续运行但消息转发可能失败")
         
         # 启动服务器
         runner = web.AppRunner(app)
@@ -116,14 +128,14 @@ async def start_server():
         site = web.TCPSite(runner, config.host, config.port)
         await site.start()
         
-        logger.info(f"服务已启动，监听地址: {config.host}:{config.port}")
+        logger.info(f"服务器已启动: http://{config.host}:{config.port}")
         
-        # 保持运行
+        # 保持服务器运行
         while True:
             await asyncio.sleep(3600)
             
     except Exception as e:
-        logger.error(f"服务启动失败: {str(e)}")
+        logger.error(f"服务器启动失败: {str(e)}")
         raise
     finally:
         await wcf_client.close()

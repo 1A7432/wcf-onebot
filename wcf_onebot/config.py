@@ -17,9 +17,14 @@ class Config(BaseModel):
         return f"http://{self.wcf_host}:{self.wcf_port}"
     
     # OneBot 服务配置
-    onebot_host: str = os.getenv("ONEBOT_HOST", "localhost")
-    onebot_port: int = int(os.getenv("ONEBOT_PORT", "8081"))
+    onebot_host: str = os.getenv("ONEBOT_HOST", "127.0.0.1")
+    onebot_port: int = int(os.getenv("ONEBOT_PORT", "8021"))
     onebot_access_token: Optional[str] = os.getenv("ONEBOT_ACCESS_TOKEN")
+    onebot_path: str = os.getenv("ONEBOT_PATH", "/onebot/v11/ws")
+
+    @property
+    def onebot_ws_url(self) -> str:
+        return f"ws://{self.onebot_host}:{self.onebot_port}{self.onebot_path}"
 
     # 服务器配置
     server_host: str = os.getenv("SERVER_HOST", "localhost")
